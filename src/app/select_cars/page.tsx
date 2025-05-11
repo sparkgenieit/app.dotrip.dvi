@@ -12,7 +12,7 @@ export async function generateMetadata({ searchParams }) {
     keywords: `${from} to ${to} cabs, ${type.toLowerCase()} taxi, cab booking, doTrip, ride fare`,
   };
 }
-import SelectCarsPage from "../../components/SelectCarsPage";
+import SelectCarsPage from "@/components/SelectCarsPage";
 
 export default function CarsPage() {
   return <SelectCarsPage />;

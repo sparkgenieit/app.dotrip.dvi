@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchWithRefresh } from '../utils/auth'; // ✅ Add at top
 
 export default function HeroSection() {
   const router = useRouter();
@@ -19,11 +20,18 @@ export default function HeroSection() {
   const [errors, setErrors] = useState<{ pickup?: string; drop?: string }>({});
 
   useEffect(() => {
-    fetch('/data/cities.json')
-      .then((res) => res.json())
-      .then((data) => setAllCities(data))
-      .catch((err) => console.error("City fetch error:", err));
-  }, []);
+  async function fetchCities() {
+    try {
+      const res = await fetchWithRefresh('/cities');
+      const data = await res.json();
+      const cityNames = data.map((city: any) => `${city.name}, ${city.state}`);
+      setAllCities(cityNames);
+    } catch (err) {
+      console.error("City fetch error:", err);
+    }
+  }
+  fetchCities();
+}, []);
 
   const filteredPickup = showPickupSuggestions
     ? pickupLocation.trim() === ""
