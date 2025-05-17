@@ -93,7 +93,7 @@ export default function SelectCarsPage() {
                 <button
                   onClick={() =>
                     router.push(
-                      `/booking?from_city_name=${from}&pickup_date=${date}&pickup_time=${time}&car=${encodeURIComponent(
+                      `/booking?from_city_name=${from}&to_city_name=${to}&pickup_date=${date}&pickup_time=${time}&car=${encodeURIComponent(
                         car.name
                       )}&fare=${car.price}&trip_type_label=${searchParams.get("trip_type_label") || "Local (8hr/80 km)"}`
                     )
