@@ -1,8 +1,26 @@
 'use client';
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { fetchWithRefresh } from "../utils/auth";
+
+type Car = {
+  id?: number;
+  name: string;
+  image: string;
+  seats: number;
+  bags?: number;
+  ac?: boolean;
+  price: number;
+  originalPrice?: number;
+  fuel?: string;
+  description?: string;
+};
+
+const tabs = [
+  { key: "INCLUSIONS", label: "Inclusions" },
+  { key: "EXCLUSIONS", label: "Exclusions" },
+  { key: "FACILITIES", label: "Facilities" },
+] as const;
 
 const tabContent = {
   INCLUSIONS: ["Base Fare", "Driver Allowance", "GST (5%)"],
@@ -14,122 +32,188 @@ const tabContent = {
     "Parking",
   ],
   FACILITIES: ["4 seater", "1 bag", "AC"],
-  "T&C": [
-    "Your Trip has a KM limit as well as an Hours limit.",
-    "Exceeding limits will incur extra charges.",
-    "Airport entry charge (if any) is excluded.",
-    "Toll, parking, and taxes are extra and paid directly.",
-    "Driving between 09:45 PM to 06:00 AM requires night allowance.",
-  ],
 };
 
 export default function SelectCarsPage() {
-  const searchParams = useSearchParams();
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState("INCLUSIONS");
-  const [cars, setCars] = useState([]);
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  useEffect(() => {
-    if (searchParams) {
-      setFrom(searchParams.get("from_city_name") || "");
-      setTo(searchParams.get("to_city_name") || "");
-      setDate(searchParams.get("pickup_date") || "");
-      setTime(searchParams.get("pickup_time") || "");
-    }
-  }, [searchParams]);
+  const from = searchParams.get("from_city_name") || "Your City";
+  const to = searchParams.get("to_city_name") || "Destination";
+  const date = searchParams.get("pickup_date") || "Today";
+  const time = searchParams.get("pickup_time") || "—";
+  const tripTypeLabel = searchParams.get("trip_type_label") || "Local (8hr/80 km)";
+  const subType = (searchParams.get("trip_sub_type") || tripTypeLabel).toUpperCase();
+
+  const [cars, setCars] = useState<Car[]>([]);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>("INCLUSIONS");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadCars() {
       try {
-        const res = await fetchWithRefresh('/vehicles');
+        const res = await fetchWithRefresh("/vehicles");
         const data = await res.json();
         setCars(data);
       } catch (err) {
         console.error("Failed to load cars", err);
+      } finally {
+        setLoading(false);
       }
     }
     loadCars();
   }, []);
 
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 w-64 bg-gray-200 rounded" />
+          <div className="h-5 w-96 bg-gray-200 rounded" />
+          <div className="grid gap-6 md:grid-cols-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-48 bg-gray-100 rounded-xl" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-2">
-        {from} → {to} ({searchParams.get("trip_sub_type")?.toUpperCase()})
-      </h1>
-      <p className="text-gray-600 mb-6">Pick up: {date} at {time}</p>
+      <div className="mb-4">
+        <h1 className="text-2xl font-semibold">
+          {from} <span className="text-gray-400">→</span> {to}{" "}
+          <span className="ml-2 inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
+            {subType}
+          </span>
+        </h1>
+        <p className="text-gray-600 mt-1">
+          Pick up: <b>{date}</b> at <b>{time}</b> • <span className="text-gray-500">{tripTypeLabel}</span>
+        </p>
+      </div>
 
       <div className="grid gap-6">
-        {cars.map((car, index) => (
-          <div key={car.id || car.name} className="border rounded-lg shadow hover:shadow-md transition overflow-hidden">
-            <div className="grid grid-cols-12 gap-4 items-center p-4">
-              <div className="col-span-3 flex items-center gap-4">
-                <img src={`cars/${car.image}`} alt={car.name} className="w-20 h-16 object-contain" />
-                <div>
-                  <h2 className="font-bold text-lg">{car.name}</h2>
-                  <p className="text-sm text-gray-500">or equivalent</p>
+        {cars.map((car, index) => {
+          const selected = openIndex === index;
+
+          return (
+            <div
+              key={car.id || car.name}
+              className={`rounded-2xl border bg-white shadow-sm transition hover:shadow-md overflow-hidden ${
+                selected ? "ring-2 ring-blue-500/60" : "ring-1 ring-gray-200"
+              }`}
+            >
+              <div className="grid grid-cols-12 gap-4 items-center p-4">
+                <div className="col-span-12 md:col-span-3 flex items-center gap-4">
+                  <img
+                    src={`cars/${car.image}`}
+                    alt={car.name}
+                    className="w-24 h-20 object-contain md:w-28 md:h-24"
+                    loading="lazy"
+                  />
+                  <div>
+                    <div className="text-lg font-semibold">{car.name}</div>
+                    <div className="text-sm text-gray-500">
+                      {car.seats} seats {car.ac ? "• AC" : ""} {car.bags ? `• ${car.bags} bag(s)` : ""}
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              <div className="col-span-5 text-center">
-                <p className="text-md font-semibold">Includes 80 km</p>
-                <p className="text-sm text-gray-600">and 8 hours</p>
-                <button
-                  className="text-blue-600 underline text-sm mt-1"
-                  onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                >
-                  {openIndex === index ? "Hide Details ▲" : "Details ▼"}
-                </button>
-              </div>
+                <div className="col-span-12 md:col-span-5">
+                  <div className="hidden md:flex items-center gap-2">
+                    <span className="inline-block rounded-full bg-gray-50 px-3 py-1 text-xs text-gray-700 ring-1 ring-gray-200">
+                      Fuel: {car.fuel || "Included"}
+                    </span>
+                    <span className="inline-block rounded-full bg-gray-50 px-3 py-1 text-xs text-gray-700 ring-1 ring-gray-200">
+                      GST Included
+                    </span>
+                    <span className="inline-block rounded-full bg-gray-50 px-3 py-1 text-xs text-gray-700 ring-1 ring-gray-200">
+                      Verified Driver
+                    </span>
+                  </div>
+                  {car.description && (
+                    <p className="mt-2 hidden md:block text-sm text-gray-600">{car.description}</p>
+                  )}
+                </div>
 
-              <div className="col-span-4 text-right">
-                <p className="text-sm text-green-600 line-through">₹{car.originalPrice}</p>
-                <p className="text-xl font-bold text-blue-600">₹{car.price}</p>
-                <p className="text-xs text-gray-500">Inclusive of GST</p>
-                <button
-                  onClick={() =>
-                    router.push(
-                      `/booking?from_city_name=${from}&to_city_name=${to}&pickup_date=${date}&pickup_time=${time}&car=${encodeURIComponent(
-                        car.name
-                      )}&fare=${car.price}&trip_type_label=${searchParams.get("trip_type_label") || "Local (8hr/80 km)"}`
-                    )
-                  }
-                  className="mt-2 bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700"
-                >
-                  Select
-                </button>
-              </div>
-            </div>
+                <div className="col-span-12 md:col-span-4 md:text-right">
+                  {car.originalPrice ? (
+                    <p className="text-sm text-green-600 line-through">₹{car.originalPrice}</p>
+                  ) : (
+                    <div className="h-5" />
+                  )}
+                  <p className="text-2xl font-bold text-blue-600 leading-tight">₹{car.price}</p>
+                  <p className="text-xs text-gray-500">Inclusive of GST</p>
 
-            {openIndex === index && (
-              <div className="border-t px-4 py-4 bg-gray-50">
-                <div className="flex gap-2 mb-3 flex-wrap">
-                  {Object.keys(tabContent).map((tab) => (
+                  <div className="mt-3 flex gap-2 md:justify-end">
                     <button
-                      key={tab}
-                      className={`px-3 py-1 border rounded text-sm ${
-                        activeTab === tab ? "bg-blue-600 text-white" : "bg-gray-200"
-                      }`}
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => setOpenIndex(selected ? null : index)}
+                      className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                     >
-                      {tab}
+                      {selected ? "Hide details" : "View details"}
                     </button>
-                  ))}
+                    <button
+                      onClick={() =>
+                        router.push(
+                          `/booking?from_city_name=${encodeURIComponent(from)}&to_city_name=${encodeURIComponent(
+                            to
+                          )}&pickup_date=${encodeURIComponent(date)}&pickup_time=${encodeURIComponent(
+                            time
+                          )}&car=${encodeURIComponent(car.name)}&fare=${encodeURIComponent(
+                            String(car.price)
+                          )}&trip_type_label=${encodeURIComponent(tripTypeLabel)}`
+                        )
+                      }
+                      className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-orange-700"
+                    >
+                      Select
+                    </button>
+                  </div>
                 </div>
-                <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                  {tabContent[activeTab].map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
-                </ul>
               </div>
-            )}
-          </div>
-        ))}
+
+              {selected && (
+                <div className="border-t bg-gradient-to-b from-white to-gray-50/60 px-4 pb-4">
+                  <div className="flex gap-2 pt-4">
+                    {tabs.map((t) => (
+                      <button
+                        key={t.key}
+                        onClick={() => setActiveTab(t.key)}
+                        className={`rounded-full px-3 py-1 text-sm font-medium ring-1 ${
+                          activeTab === t.key
+                            ? "bg-blue-600 text-white ring-blue-600"
+                            : "bg-white text-gray-700 ring-gray-200 hover:bg-gray-50"
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {tabContent[activeTab].map((line) => (
+                      <li
+                        key={line}
+                        className="flex items-start gap-2 rounded-lg bg-white/60 p-2 text-sm text-gray-700 ring-1 ring-gray-200"
+                      >
+                        <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-500" />
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      <p className="mt-6 text-xs text-gray-500">
+        Prices shown are estimates. Final fare may vary based on route, tolls, and waiting time.
+      </p>
     </div>
   );
 }
