@@ -3,6 +3,56 @@ import React, { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { fetchWithRefresh } from '../utils/auth';
 
+// --- Helpers ---
+// Safe JSON parse (handles empty 201/204 responses)
+async function safeJson<T = any>(res: Response): Promise<T | null> {
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text) as T; } catch { return null; }
+}
+
+// "2025-05-05" + "07:00" -> ISO string
+function toISO(date: string, time: string) {
+  const d = new Date(`${date}T${time || '00:00'}:00`);
+  return d.toISOString();
+}
+
+// Lookup: "Kolkata, West Bengal" -> city.id
+async function getCityIdByLabel(label: string): Promise<number | null> {
+  const [name, state] = label.split(',').map(s => s.trim());
+  const res = await fetchWithRefresh('/cities');
+  if (!res.ok) return null;
+  const list = await res.json();
+  const found = list.find((c: any) =>
+    c.name?.toLowerCase() === (name || '').toLowerCase() &&
+    c.state?.toLowerCase() === (state || '').toLowerCase()
+  );
+  return found?.id ?? null;
+}
+
+// Lookup: "Sedan" -> vehicleType.id
+async function getVehicleTypeIdByName(name: string): Promise<number | null> {
+  const res = await fetchWithRefresh('/vehicle-types');
+  if (!res.ok) return null;
+  const list = await res.json();
+  const found = list.find((v: any) => v.name?.toLowerCase() === name.toLowerCase());
+  return found?.id ?? null;
+}
+
+// Lookup: "AIRPORT" -> tripType.id (API first, fallback map)
+async function getTripTypeId(label: string): Promise<number | null> {
+  try {
+    const r = await fetchWithRefresh('/trip-types');
+    if (r.ok) {
+      const list = await r.json();
+      const found = list.find((t: any) => (t.name || t.label)?.toLowerCase() === label.toLowerCase());
+      if (found?.id) return found.id;
+    }
+  } catch {}
+  const fallback: Record<string, number> = { 'ONE WAY': 1, 'ROUND TRIP': 2, 'LOCAL': 3, 'AIRPORT': 4 };
+  return fallback[label.toUpperCase()] ?? null;
+}
+
 export default function BookingForm() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -28,30 +78,102 @@ export default function BookingForm() {
   // basic “required” check
   const canSubmit = pickupLocation.trim() && name.trim() && email.trim() && phone.trim();
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!canSubmit) return;
+async function handleSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  if (!canSubmit) return;
 
-    setSubmitting(true);
-    setError(null);
-    try {
-      // Normally: call your API to create the booking
-      const payload = {
-        user: { name, email, phone, pickupLocation },
-        trip: { from, to, date, time, car, fare, tripTypeLabel },
-      };
-      // example:
-      // await fetchWithRefresh('/bookings', { method: 'POST', body: JSON.stringify(payload) })
+  setSubmitting(true);
+  setError(null);
 
-      console.log('BOOKING SUBMIT', payload);
-      router.push('/booking-confirmation');
-    } catch (err: any) {
-      console.error(err);
-      setError('Something went wrong. Please try again.');
-    } finally {
+  try {
+    // Resolve IDs required by backend
+    const tripLabel = (tripTypeLabel || '').toUpperCase();
+    const [fromCityId, toCityId, vehicleTypeId, tripTypeId] = await Promise.all([
+      getCityIdByLabel(from),
+      getCityIdByLabel(to),
+      getVehicleTypeIdByName(car),
+      getTripTypeId(tripLabel),
+    ]);
+
+    if (!fromCityId || !toCityId || !vehicleTypeId || !tripTypeId) {
+      setError('Could not resolve city/vehicle/trip type. Please revise your selection.');
       setSubmitting(false);
+      return;
     }
+
+    // Parse fare safely (strip any non-digits just in case)
+    const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
+
+    // Flat DTO expected by backend
+    const payload = {
+      phone,                                   // string
+      pickupLocation,                          // string
+      dropoffLocation: to,                     // string
+      pickupDateTime: toISO(date, time),       // ISO 8601
+      fromCityId,                              // number
+      toCityId,                                // number
+      tripTypeId,                              // number
+      vehicleTypeId,                           // number
+      fare: fareNum,                           // number
+      // NOTE: name/email are not in the backend DTO; omitted on purpose
+    };
+
+    const res = await fetchWithRefresh('/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      // Show nice validation errors from Nest (message: string[])
+      const txt = await res.text().catch(() => '');
+      try {
+        const body = JSON.parse(txt);
+        if (Array.isArray(body?.message)) {
+          setError(body.message.join(' • '));
+        } else if (typeof body?.error === 'string') {
+          setError(`${body.error}${body?.statusCode ? ` (${body.statusCode})` : ''}`);
+        } else {
+          setError(`Create booking failed (${res.status})`);
+        }
+      } catch {
+        setError(`Create booking failed (${res.status}) ${txt}`);
+      }
+      setSubmitting(false);
+      return;
+    }
+
+    // Extract created booking id from JSON or headers
+    const data = await safeJson<{ id?: number }>(res);
+    let createdId = data?.id ?? null;
+
+    if (!createdId) {
+      const loc = res.headers.get('Location') || res.headers.get('location') || '';
+      const last = Number(loc.split('/').pop());
+      if (Number.isFinite(last)) createdId = last;
+    }
+    if (!createdId) {
+      const hdr = res.headers.get('x-booking-id');
+      const num = hdr ? Number(hdr) : NaN;
+      if (Number.isFinite(num)) createdId = num;
+    }
+
+    // Store a fallback so confirmation can recover even without ?id=
+    if (createdId) {
+      try { sessionStorage.setItem('lastBookingId', String(createdId)); } catch {}
+      router.push(`/booking-confirmation?id=${createdId}`);
+    } else {
+      console.warn('Booking created but no id was returned.');
+      router.push('/booking-confirmation');
+    }
+  } catch (err: any) {
+    console.error(err);
+    setError(err.message || 'Something went wrong. Please try again.');
+  } finally {
+    setSubmitting(false);
   }
+}
+
 
   // rough email/phone hints (optional soft validation)
   useEffect(() => {
