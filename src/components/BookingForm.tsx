@@ -53,6 +53,68 @@ async function getTripTypeId(label: string): Promise<number | null> {
   return fallback[label.toUpperCase()] ?? null;
 }
 
+type AddressType = 'HOME' | 'OFFICE' | 'OTHER' | 'PICKUP' | 'DROP';
+interface AddressLite {
+  id: number;
+  type: AddressType;
+  address?: string | null;
+  city?: string | null;
+  pinCode?: string | null;
+  createdAt: string; // ISO string
+}
+interface CheckPhoneResponse {
+  exists: boolean;
+  user?: { id: number; name: string; phone: string };
+  addresses?: AddressLite[];
+}
+
+// Keep only the newest address per type
+function latestPerType(addresses: AddressLite[] = []): AddressLite[] {
+  const sorted = [...addresses].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  const seen = new Set<AddressType>();
+  const out: AddressLite[] = [];
+  for (const a of sorted) {
+    if (!seen.has(a.type)) {
+      out.push(a);
+      seen.add(a.type);
+    }
+  }
+  return out;
+}
+
+// Call backend: POST /users/check-phone
+async function fetchUserByPhone(phone: string): Promise<CheckPhoneResponse> {
+  try {
+    const res = await fetchWithRefresh('/users/check-phone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    if (!res.ok) return { exists: false };
+
+    const data = await res.json().catch(() => null) || {};
+    const rawAddresses: AddressLite[] = data.addresses ?? data.user?.addressBooks ?? [];
+    const deduped = latestPerType(rawAddresses);
+
+    return {
+      exists: Boolean(data?.exists),
+      user: data?.user
+        ? {
+            id: Number(data.user.id),
+            name: String(data.user.name ?? ''),
+            phone: String(data.user.phone ?? ''),
+          }
+        : undefined,
+      addresses: deduped,
+    };
+  } catch (e) {
+    console.error('check-phone failed:', e);
+    return { exists: false };
+  }
+}
+
 export default function BookingForm() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -174,6 +236,22 @@ async function handleSubmit(e: React.FormEvent) {
   }
 }
 
+async function handlePhoneBlur() {
+  const digits = phone.trim();
+  if (!/^\d{7,15}$/.test(digits)) return; // soft guard
+
+  const { exists, user, addresses } = await fetchUserByPhone(digits);
+  if (!exists || !user) return;
+
+  // Prefill name if empty
+  if (!name && user.name) setName(user.name);
+
+  // Prefill pickup from latest PICKUP address if available
+  const pickup = addresses?.find(a => a.type === 'PICKUP');
+  if (!pickupLocation && pickup?.address) {
+    setPickupLocation(pickup.address);
+  }
+}
 
   // rough email/phone hints (optional soft validation)
   useEffect(() => {
@@ -191,6 +269,17 @@ async function handleSubmit(e: React.FormEvent) {
           <p className="mt-1 text-gray-600">We’ll use this to confirm your ride.</p>
 
           <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+                          <div className="sm:col-span-2">
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Phone</label>
+                  <input
+                    type="tel"
+                    placeholder="10-digit mobile"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    onBlur={handlePhoneBlur} // ← fetch /users/check-phone and prefill
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Pickup Location</label>
               <input
@@ -220,16 +309,6 @@ async function handleSubmit(e: React.FormEvent) {
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Phone</label>
-                <input
-                  type="tel"
-                  placeholder="10-digit mobile"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 />
               </div>

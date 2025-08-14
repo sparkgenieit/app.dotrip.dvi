@@ -7,6 +7,7 @@ type Car = {
   id?: number;
   name: string;
   image: string;
+  imageUrl: string;
   seats: number;
   bags?: number;
   ac?: boolean;
@@ -23,6 +24,7 @@ type ApiVehicleType = {
   estimatedRatePerKm: number;
   baseFare: number;
   seatingCapacity: number;
+  image?: any;
 };
 
 // optional: image mapping (adjust file names in /public/cars if needed)
@@ -32,6 +34,14 @@ const IMAGE_MAP: Record<string, string> = {
   Hatchback: "hatchback.png",
   "Tempo Traveller": "tempo.png",
 };
+
+// pull the first usable URL from the JSON image field
+function coverFromImageJson(img: any): string {
+  if (!img) return '';
+  const first = Array.isArray(img) ? img[0] : img;
+  if (typeof first === 'string') return first;
+  return first?.url || first?.dataUrl || '';
+}
 
 // nice INR formatting
 const formatINR = (n: number | string) =>
@@ -93,18 +103,19 @@ useEffect(() => {
         // If distance provided: base + rate * km, else show base fare
         const estimated = hasDistance ? Math.round(base + rate * distanceKmParam) : base;
 
-        return {
-          id: v.id,
-          name: v.name,
-          image: IMAGE_MAP[v.name] ?? "default.png",
-          seats: v.seatingCapacity,
-          price: estimated,
-          originalPrice: Math.round(estimated * 1.12),
-          fuel: "Included",
-          description: `₹${rate}/km after base fare`,
-          ac: true,
-          bags: 1,
-        };
+      const cover = coverFromImageJson(v.image);
+      return {
+        id: v.id,
+        name: v.name,
+        imageUrl: cover || (IMAGE_MAP[v.name] ?? "default.png"),
+        seats: v.seatingCapacity,
+        price: estimated,
+        originalPrice: Math.round(estimated * 1.12),
+        fuel: "Included",
+        description: `₹${rate}/km after base fare`,
+        ac: true,
+        bags: 1,
+      };
       });
 
       setCars(mapped);
@@ -161,7 +172,13 @@ useEffect(() => {
               <div className="grid grid-cols-12 gap-4 items-center p-4">
                 <div className="col-span-12 md:col-span-3 flex items-center gap-4">
                   <img
-                    src={`cars/${car.image}`}
+                    src={
+                      car.imageUrl?.startsWith('http') ||
+                      car.imageUrl?.startsWith('data:') ||
+                      car.imageUrl?.startsWith('/uploads')
+                        ? car.imageUrl
+                        : `/cars/${car.imageUrl}` // fallback to /public/cars/*
+                    }
                     alt={car.name}
                     className="w-24 h-20 object-contain md:w-28 md:h-24"
                     loading="lazy"
