@@ -16,6 +16,30 @@ type Car = {
   description?: string;
 };
 
+// API shape returned by /vehicle-types
+type ApiVehicleType = {
+  id: number;
+  name: string;
+  estimatedRatePerKm: number;
+  baseFare: number;
+  seatingCapacity: number;
+};
+
+// optional: image mapping (adjust file names in /public/cars if needed)
+const IMAGE_MAP: Record<string, string> = {
+  Sedan: "sedan.png",
+  SUV: "suv.png",
+  Hatchback: "hatchback.png",
+  "Tempo Traveller": "tempo.png",
+};
+
+// nice INR formatting
+const formatINR = (n: number | string) =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(
+    Number(n || 0)
+  );
+
+
 const tabs = [
   { key: "INCLUSIONS", label: "Inclusions" },
   { key: "EXCLUSIONS", label: "Exclusions" },
@@ -42,28 +66,56 @@ export default function SelectCarsPage() {
   const to = searchParams.get("to_city_name") || "Destination";
   const date = searchParams.get("pickup_date") || "Today";
   const time = searchParams.get("pickup_time") || "—";
-  const tripTypeLabel = searchParams.get("trip_type_label") || "Local (8hr/80 km)";
-  const subType = (searchParams.get("trip_sub_type") || tripTypeLabel).toUpperCase();
+const tripTypeLabel = searchParams.get("trip_type_label") || "Local (8hr/80 km)";
+const subType = (searchParams.get("trip_sub_type") || tripTypeLabel).toUpperCase();
+
+// NEW: optional distance for price estimate
+const distanceKmParamRaw = searchParams.get("distance_km");
+const distanceKmParam = distanceKmParamRaw ? Number(distanceKmParamRaw) : NaN;
+const hasDistance = Number.isFinite(distanceKmParam) && distanceKmParam > 0;
+
 
   const [cars, setCars] = useState<Car[]>([]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>("INCLUSIONS");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function loadCars() {
-      try {
-        const res = await fetchWithRefresh("/vehicles");
-        const data = await res.json();
-        setCars(data);
-      } catch (err) {
-        console.error("Failed to load cars", err);
-      } finally {
-        setLoading(false);
-      }
+useEffect(() => {
+  async function loadCars() {
+    try {
+      const res = await fetchWithRefresh("/vehicle-types");
+      const data: ApiVehicleType[] = await res.json();
+
+      const mapped: Car[] = data.map((v) => {
+        const base = v.baseFare ?? 0;
+        const rate = v.estimatedRatePerKm ?? 0;
+
+        // If distance provided: base + rate * km, else show base fare
+        const estimated = hasDistance ? Math.round(base + rate * distanceKmParam) : base;
+
+        return {
+          id: v.id,
+          name: v.name,
+          image: IMAGE_MAP[v.name] ?? "default.png",
+          seats: v.seatingCapacity,
+          price: estimated,
+          originalPrice: Math.round(estimated * 1.12),
+          fuel: "Included",
+          description: `₹${rate}/km after base fare`,
+          ac: true,
+          bags: 1,
+        };
+      });
+
+      setCars(mapped);
+    } catch (err) {
+      console.error("Failed to load cars", err);
+    } finally {
+      setLoading(false);
     }
-    loadCars();
-  }, []);
+  }
+  loadCars();
+}, [hasDistance, distanceKmParam]);
 
   if (loading) {
     return (
@@ -141,11 +193,14 @@ export default function SelectCarsPage() {
 
                 <div className="col-span-12 md:col-span-4 md:text-right">
                   {car.originalPrice ? (
-                    <p className="text-sm text-green-600 line-through">₹{car.originalPrice}</p>
+                    <p className="text-sm text-green-600 line-through">{formatINR(car.originalPrice)}</p>
                   ) : (
                     <div className="h-5" />
                   )}
-                  <p className="text-2xl font-bold text-blue-600 leading-tight">₹{car.price}</p>
+                  <p className="text-2xl font-bold text-blue-600 leading-tight">
+                    {formatINR(car.price)}
+                  </p>
+
                   <p className="text-xs text-gray-500">Inclusive of GST</p>
 
                   <div className="mt-3 flex gap-2 md:justify-end">
