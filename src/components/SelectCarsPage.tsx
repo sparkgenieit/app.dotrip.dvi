@@ -76,8 +76,9 @@ export default function SelectCarsPage() {
   const to = searchParams.get("to_city_name") || "Destination";
   const date = searchParams.get("pickup_date") || "Today";
   const time = searchParams.get("pickup_time") || "—";
-const tripTypeLabel = searchParams.get("trip_type_label") || "Local (8hr/80 km)";
-const subType = (searchParams.get("trip_sub_type") || tripTypeLabel).toUpperCase();
+  const tripTypeLabel = searchParams.get("trip_type_label") || "Local (8hr/80 km)";
+  const subType = (searchParams.get("trip_sub_type") || tripTypeLabel).toUpperCase();
+  const returnDate = searchParams.get("return_date") || "";
 
 // NEW: optional distance for price estimate
 const distanceKmParamRaw = searchParams.get("distance_km");
@@ -127,6 +128,25 @@ useEffect(() => {
   }
   loadCars();
 }, [hasDistance, distanceKmParam]);
+
+const continueToBooking = (carName: string, price: number | string) => {
+  const params = new URLSearchParams();
+  params.set("from_city_name", from);
+  params.set("to_city_name", to);
+  params.set("pickup_date", date);
+  params.set("pickup_time", time);
+  params.set("trip_type_label", tripTypeLabel);
+
+  const sub = (searchParams.get("trip_sub_type") || "").trim();
+  if (sub) params.set("trip_sub_type", sub);
+
+  if (returnDate) params.set("return_date", returnDate);
+
+  params.set("car", carName);
+  params.set("fare", String(price));
+
+  router.push(`/booking?${params.toString()}`);
+};
 
   if (loading) {
     return (
@@ -228,17 +248,7 @@ useEffect(() => {
                       {selected ? "Hide details" : "View details"}
                     </button>
                     <button
-                      onClick={() =>
-                        router.push(
-                          `/booking?from_city_name=${encodeURIComponent(from)}&to_city_name=${encodeURIComponent(
-                            to
-                          )}&pickup_date=${encodeURIComponent(date)}&pickup_time=${encodeURIComponent(
-                            time
-                          )}&car=${encodeURIComponent(car.name)}&fare=${encodeURIComponent(
-                            String(car.price)
-                          )}&trip_type_label=${encodeURIComponent(tripTypeLabel)}`
-                        )
-                      }
+                      onClick={() => continueToBooking(car.name, car.price)}
                       className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-orange-700"
                     >
                       Select

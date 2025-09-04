@@ -136,6 +136,9 @@ export default function BookingForm() {
   const car = sp.get('car') || '—';
   const fare = sp.get('fare') || '—';
   const tripTypeLabel = sp.get('trip_type_label') || 'Trip';
+  const returnDate = sp.get('return_date') || '';
+  const isRoundTrip = (tripTypeLabel || '').toUpperCase() === 'ROUND TRIP';
+
 
   // basic “required” check
   const canSubmit = pickupLocation.trim() && name.trim() && email.trim() && phone.trim();
@@ -165,7 +168,11 @@ async function handleSubmit(e: React.FormEvent) {
 
     // Parse fare safely (strip any non-digits just in case)
     const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
-
+    if (isRoundTrip && !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
+    setError('Please select a valid return date for a round trip.');
+    setSubmitting(false);
+    return;
+}
     // Flat DTO expected by backend
     const payload = {
       phone,                                   // string
@@ -177,8 +184,10 @@ async function handleSubmit(e: React.FormEvent) {
       tripTypeId,                              // number
       vehicleTypeId,                           // number
       fare: fareNum,                           // number
-      // NOTE: name/email are not in the backend DTO; omitted on purpose
+      // 👇 include only for round trip when provided
+      ...(isRoundTrip && returnDate ? { returnDate } : {}),
     };
+
 
     const res = await fetchWithRefresh('/bookings', {
       method: 'POST',
@@ -361,6 +370,12 @@ async function handlePhoneBlur() {
               <span>Pickup</span>
               <span className="font-medium">{date} {time !== "—" ? `• ${time}` : ""}</span>
             </div>
+            {isRoundTrip && returnDate && (
+              <div className="flex justify-between">
+                <span>Return</span>
+                <span className="font-medium">{returnDate}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>Vehicle</span>
               <span className="font-medium">{car}</span>
