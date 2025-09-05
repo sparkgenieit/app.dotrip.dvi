@@ -6,7 +6,7 @@ import { fetchWithRefresh } from "../utils/auth";
 type Car = {
   id?: number;
   name: string;
-  image: string;
+  image?: string;
   imageUrl: string;
   seats: number;
   bags?: number;
