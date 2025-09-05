@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { fetchWithRefresh } from '../utils/auth';
 
@@ -128,6 +128,19 @@ export default function BookingForm() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
 
+  // OTP state
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpTimer, setOtpTimer] = useState(0);          // seconds remaining for resend
+  const [otpRequestId, setOtpRequestId] = useState<string | null>(null);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const otpVerifiedRef = useRef(false);
+  // store booking payload until OTP verified
+  const [pendingPayload, setPendingPayload] = useState<any | null>(null);
+
+
   // derived from query
   const from = sp.get('from_city_name') || '—';
   const to = sp.get('to_city_name') || '—';
@@ -136,104 +149,166 @@ export default function BookingForm() {
   const car = sp.get('car') || '—';
   const fare = sp.get('fare') || '—';
   const tripTypeLabel = sp.get('trip_type_label') || 'Trip';
+  const returnDate = sp.get('return_date') || '';
+  const isRoundTrip = (tripTypeLabel || '').toUpperCase() === 'ROUND TRIP';
+
+  // ---- OTP endpoints (adjust to your backend if different) ----
+const OTP_SEND_URL = '/auth/otp/send';
+const OTP_VERIFY_URL = '/auth/otp/verify';
+
+// Send OTP to phone
+async function sendOtp(toPhone: string) {
+  // Testing mode: no backend call — just open the modal
+  setShowOtpModal(true);
+  setOtp('');
+  setOtpVerified(false);
+  otpVerifiedRef.current = false;  // <-- reset the guard ref
+  setOtpRequestId('mock');
+  setOtpTimer(60);                  // resend cooldown
+  setOtpSending(false);
+  setError(null);
+}
+
+// Verify OTP; on success proceed with booking
+async function verifyOtpAndBook() {
+  if (!phone || !otp) return;
+  setOtpVerifying(true);
+  setError(null);
+
+  try {
+    // ✅ Testing mode: only "1234" is accepted
+    if (otp.trim() !== '1234') {
+      throw new Error('Invalid OTP. Use 1234 for testing.');
+    }
+
+    // Mark verified BEFORE creating booking to avoid any race
+    otpVerifiedRef.current = true;
+    setOtpVerified(true);
+    setShowOtpModal(false);
+
+    // Build payload and create booking
+    const payload = await buildPayload();
+    if (!payload) return;
+    await createBooking(payload);
+  } catch (e: any) {
+    setError(e?.message || 'OTP verification failed');
+  } finally {
+    setOtpVerifying(false);
+  }
+}
+
+// Final guard: do not create a booking unless OTP is verified.
+// If someone calls this by mistake, we open the OTP modal instead.
+async function createBooking(payload: any) {
+  if (!otpVerified && !otpVerifiedRef.current) {
+    setPendingPayload(payload);
+    setShowOtpModal(true);
+    return;
+  }
+
+  const res = await fetchWithRefresh('/bookings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    try {
+      const body = JSON.parse(txt);
+      if (Array.isArray(body?.message)) {
+        setError(body.message.join(' • '));
+      } else if (typeof body?.error === 'string') {
+        setError(`${body.error}${body?.statusCode ? ` (${body.statusCode})` : ''}`);
+      } else {
+        setError(`Create booking failed (${res.status})`);
+      }
+    } catch {
+      setError(`Create booking failed (${res.status}) ${txt}`);
+    }
+    return;
+  }
+
+  const data = await safeJson<{ id?: number }>(res);
+  let createdId = data?.id ?? null;
+
+  if (!createdId) {
+    const loc = res.headers.get('Location') || res.headers.get('location') || '';
+    const last = Number(loc.split('/').pop());
+    if (Number.isFinite(last)) createdId = last;
+  }
+  if (!createdId) {
+    const hdr = res.headers.get('x-booking-id');
+    const num = hdr ? Number(hdr) : NaN;
+    if (Number.isFinite(num)) createdId = num;
+  }
+
+  if (createdId) {
+    try { sessionStorage.setItem('lastBookingId', String(createdId)); } catch {}
+    router.push(`/booking-confirmation?id=${createdId}`);
+  } else {
+    console.warn('Booking created but no id was returned.');
+    router.push('/booking-confirmation');
+  }
+}
 
   // basic “required” check
   const canSubmit = pickupLocation.trim() && name.trim() && email.trim() && phone.trim();
 
 async function handleSubmit(e: React.FormEvent) {
   e.preventDefault();
-  if (!canSubmit) return;
+  await onConfirmClick();
+}
 
-  setSubmitting(true);
-  setError(null);
+async function buildPayload(): Promise<any | null> {
+  // Resolve IDs required by backend
+  const tripLabel = (tripTypeLabel || '').toUpperCase();
+  const [fromCityId, toCityId, vehicleTypeId, tripTypeId] = await Promise.all([
+    getCityIdByLabel(from),
+    getCityIdByLabel(to),
+    getVehicleTypeIdByName(car),
+    getTripTypeId(tripLabel),
+  ]);
 
-  try {
-    // Resolve IDs required by backend
-    const tripLabel = (tripTypeLabel || '').toUpperCase();
-    const [fromCityId, toCityId, vehicleTypeId, tripTypeId] = await Promise.all([
-      getCityIdByLabel(from),
-      getCityIdByLabel(to),
-      getVehicleTypeIdByName(car),
-      getTripTypeId(tripLabel),
-    ]);
-
-    if (!fromCityId || !toCityId || !vehicleTypeId || !tripTypeId) {
-      setError('Could not resolve city/vehicle/trip type. Please revise your selection.');
-      setSubmitting(false);
-      return;
-    }
-
-    // Parse fare safely (strip any non-digits just in case)
-    const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
-
-    // Flat DTO expected by backend
-    const payload = {
-      phone,                                   // string
-      pickupLocation,                          // string
-      dropoffLocation: to,                     // string
-      pickupDateTime: toISO(date, time),       // ISO 8601
-      fromCityId,                              // number
-      toCityId,                                // number
-      tripTypeId,                              // number
-      vehicleTypeId,                           // number
-      fare: fareNum,                           // number
-      // NOTE: name/email are not in the backend DTO; omitted on purpose
-    };
-
-    const res = await fetchWithRefresh('/bookings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      // Show nice validation errors from Nest (message: string[])
-      const txt = await res.text().catch(() => '');
-      try {
-        const body = JSON.parse(txt);
-        if (Array.isArray(body?.message)) {
-          setError(body.message.join(' • '));
-        } else if (typeof body?.error === 'string') {
-          setError(`${body.error}${body?.statusCode ? ` (${body.statusCode})` : ''}`);
-        } else {
-          setError(`Create booking failed (${res.status})`);
-        }
-      } catch {
-        setError(`Create booking failed (${res.status}) ${txt}`);
-      }
-      setSubmitting(false);
-      return;
-    }
-
-    // Extract created booking id from JSON or headers
-    const data = await safeJson<{ id?: number }>(res);
-    let createdId = data?.id ?? null;
-
-    if (!createdId) {
-      const loc = res.headers.get('Location') || res.headers.get('location') || '';
-      const last = Number(loc.split('/').pop());
-      if (Number.isFinite(last)) createdId = last;
-    }
-    if (!createdId) {
-      const hdr = res.headers.get('x-booking-id');
-      const num = hdr ? Number(hdr) : NaN;
-      if (Number.isFinite(num)) createdId = num;
-    }
-
-    // Store a fallback so confirmation can recover even without ?id=
-    if (createdId) {
-      try { sessionStorage.setItem('lastBookingId', String(createdId)); } catch {}
-      router.push(`/booking-confirmation?id=${createdId}`);
-    } else {
-      console.warn('Booking created but no id was returned.');
-      router.push('/booking-confirmation');
-    }
-  } catch (err: any) {
-    console.error(err);
-    setError(err.message || 'Something went wrong. Please try again.');
-  } finally {
-    setSubmitting(false);
+  if (!fromCityId || !toCityId || !vehicleTypeId || !tripTypeId) {
+    setError('Could not resolve city/vehicle/trip type. Please revise your selection.');
+    return null;
   }
+
+  // Parse fare safely
+  const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
+
+  if (isRoundTrip && !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
+    setError('Please select a valid return date for a round trip.');
+    return null;
+  }
+
+  return {
+    phone,
+    pickupLocation,
+    dropoffLocation: to,
+    pickupDateTime: toISO(date, time),
+    fromCityId,
+    toCityId,
+    tripTypeId,
+    vehicleTypeId,
+    fare: fareNum,
+    numPersons: 4,
+    ...(isRoundTrip && returnDate ? { returnDate } : {}),
+  };
+}
+
+async function onConfirmClick() {
+  if (!pickupLocation.trim() || !name.trim() || !email.trim() || !phone.trim()) {
+    setError('Please fill all required fields.');
+    return;
+  }
+  if (!/^\d{7,15}$/.test(phone.trim())) {
+    setError('Enter a valid phone number to receive OTP.');
+    return;
+  }
+  setError(null);
+  await sendOtp(phone); // opens modal immediately; booking happens after verify
 }
 
 async function handlePhoneBlur() {
@@ -259,6 +334,20 @@ async function handlePhoneBlur() {
     else if (phone && !/^\d{7,15}$/.test(phone)) setError('Phone should be 7–15 digits.');
     else setError(null);
   }, [email, phone]);
+
+  // Reset OTP state when phone changes
+useEffect(() => {
+  setOtpVerified(false);
+  setOtp('');
+  setOtpRequestId(null);
+}, [phone]);
+
+  // OTP resend countdown tick
+  useEffect(() => {
+    if (!showOtpModal || otpTimer <= 0) return;
+    const id = setTimeout(() => setOtpTimer((s) => s - 1), 1000);
+    return () => clearTimeout(id);
+  }, [showOtpModal, otpTimer]);
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 p-6 md:grid-cols-12">
@@ -329,16 +418,17 @@ async function handlePhoneBlur() {
                 Back
               </button>
               <button
-                type="submit"
-                disabled={!canSubmit || submitting}
-                className={`rounded-lg px-5 py-2 text-sm font-semibold text-white shadow ${
-                  canSubmit && !submitting
-                    ? "bg-green-600 hover:bg-green-700"
-                    : "bg-green-400 cursor-not-allowed"
-                }`}
-              >
-                {submitting ? "Booking…" : "Confirm Booking"}
-              </button>
+              type="button"
+              onClick={onConfirmClick}
+              disabled={!canSubmit || submitting}
+              className={`rounded-lg px-5 py-2 text-sm font-semibold text-white shadow ${
+                canSubmit && !submitting
+                  ? "bg-green-600 hover:bg-green-700"
+                  : "bg-green-400 cursor-not-allowed"
+              }`}
+            >
+              Confirm Booking
+            </button>
             </div>
           </form>
         </div>
@@ -361,6 +451,12 @@ async function handlePhoneBlur() {
               <span>Pickup</span>
               <span className="font-medium">{date} {time !== "—" ? `• ${time}` : ""}</span>
             </div>
+            {isRoundTrip && returnDate && (
+              <div className="flex justify-between">
+                <span>Return</span>
+                <span className="font-medium">{returnDate}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>Vehicle</span>
               <span className="font-medium">{car}</span>
@@ -375,6 +471,57 @@ async function handlePhoneBlur() {
           </p>
         </div>
       </aside>
+      {showOtpModal && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">OTP sent to {phone}</h3>
+              <button
+                onClick={() => setShowOtpModal(false)}
+                className="rounded-full px-2 py-1 text-gray-500 hover:bg-gray-100"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="Enter OTP sent to your number"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              className="mb-4 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+            <p className="mb-3 text-xs text-gray-500">
+              Testing mode: use <b>1234</b> as the OTP.
+            </p>
+
+
+            <button
+                type="button"
+                onClick={verifyOtpAndBook}
+                disabled={!otp || otpVerifying}
+                className={`mb-3 w-full rounded-lg px-4 py-2 text-sm font-semibold text-white shadow ${
+                  !otp || otpVerifying ? 'cursor-not-allowed bg-orange-300' : 'bg-orange-500 hover:bg-orange-600'
+                }`}
+              >
+              {otpVerifying ? 'Verifying…' : 'Verify OTP'}
+            </button>
+
+            <div className="flex items-center justify-between text-xs text-gray-600">
+              <button
+                onClick={() => otpTimer === 0 && sendOtp(phone)}
+                disabled={otpTimer > 0 || otpSending}
+                className={`underline ${otpTimer > 0 ? 'cursor-not-allowed text-gray-400 no-underline' : ''}`}
+              >
+                {otpTimer > 0 ? `Resend OTP in 00:${String(otpTimer).padStart(2, '0')}` : (otpSending ? 'Sending…' : 'Resend OTP')}
+              </button>
+              <span>Valid for 15 minutes</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

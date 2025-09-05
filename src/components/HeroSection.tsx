@@ -15,6 +15,7 @@ const [tripType, setTripType] = useState("AIRPORT");
 const [pickupLocation, setPickupLocation] = useState("");
 const [pickupDate, setPickupDate] = useState("2025-05-05");
 const [pickupTime, setPickupTime] = useState("07:00");
+const [returnDate, setReturnDate] = useState("2025-05-05");
 
 // MULTI-STOP "TO" field
 const [toStops, setToStops] = useState<Array<{ id: string; value: string }>>([
@@ -90,6 +91,10 @@ const handleSubmit = () => {
     pickup_time: pickupTime,
   });
 
+  if (tripType === "ROUND TRIP" && returnDate) {
+    params.set("return_date", returnDate);
+  }
+
   // Optional: pass ALL drops as JSON (backend can ignore if not needed)
   if (toCities.length > 1) {
     params.set("to_cities", JSON.stringify(toCities));
@@ -110,7 +115,7 @@ const handleSubmit = () => {
         <h1 className="text-5xl font-bold mb-4">Find the Perfect Ride</h1>
         <p className="text-lg mb-8">Book your car in seconds, drive it for days.</p>
 
-        <div className="bg-white text-black shadow-lg rounded-xl p-6 w-full max-w-6xl mx-auto mt-10">
+        <div className="bg-white text-black shadow-lg rounded-xl p-6 w-full max-w-7xl mx-auto mt-10">
           <div className="flex justify-center items-center mb-6 flex-wrap gap-2">
             {["ONE WAY", "ROUND TRIP", "LOCAL", "AIRPORT"].map((type) => (
               <button
@@ -127,13 +132,13 @@ const handleSubmit = () => {
             ))}
           </div>
 
-          <form
-            className="grid md:grid-cols-6 gap-4 relative z-10"
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSubmit();
-            }}
-          >
+            <form
+              className={`grid ${tripType === "ROUND TRIP" ? "md:grid-cols-7" : "md:grid-cols-6"} gap-4 relative z-10`}
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSubmit();
+              }}
+            >
             {/* Pickup Location */}
             <div className="col-span-2 relative">
               <label className="block text-sm font-medium text-gray-700">FROM</label>
@@ -170,98 +175,97 @@ const handleSubmit = () => {
               )}
             </div>
 
-{/* Drop Locations (multi-stop with + / –) */}
-<div className="col-span-2">
-  <div className="flex items-center justify-between">
-    <label className="block text-sm font-medium text-gray-700">TO</label>
-    <span className="text-xs text-gray-500">{toStops.length}/{maxStops}</span>
-  </div>
+            {/* Drop Locations (multi-stop with + / –) */}
+            <div className="col-span-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-gray-700">TO</label>
+                <span className="text-xs text-gray-500">{toStops.length}/{maxStops}</span>
+              </div>
 
-  <div className="space-y-2">
-    {toStops.map((row, idx) => (
-      <div key={row.id} className="relative">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Enter Drop Location"
-            className={`flex-1 mt-1 block w-full border rounded text-black px-3 py-2 ${
-              idx === 0 && errors.drop ? 'border-red-500' : 'border-gray-300'
-            }`}
-            value={row.value}
-            onChange={(e) => {
-              const next = [...toStops];
-              next[idx] = { ...next[idx], value: e.target.value };
-              setToStops(next);
-            }}
-            onFocus={() => setActiveDropIndex(idx)}
-            onBlur={() => setTimeout(() => setActiveDropIndex(null), 100)}
-            aria-label={`Drop location ${idx + 1}`}
-          />
+              <div className="space-y-2">
+                {toStops.map((row, idx) => (
+                  <div key={row.id} className="relative">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Enter Drop Location"
+                        className={`flex-1 mt-1 block w-full border rounded text-black px-3 py-2 ${
+                          idx === 0 && errors.drop ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...toStops];
+                          next[idx] = { ...next[idx], value: e.target.value };
+                          setToStops(next);
+                        }}
+                        onFocus={() => setActiveDropIndex(idx)}
+                        onBlur={() => setTimeout(() => setActiveDropIndex(null), 100)}
+                        aria-label={`Drop location ${idx + 1}`}
+                      />
 
-          {/* – remove (hide if only one row) */}
-          {toStops.length > minStops && (
-            <button
-              type="button"
-              className="mt-1 h-10 w-9 rounded-md border border-gray-300 text-gray-700"
-              onClick={() =>
-                setToStops((prev) => prev.filter((_, i) => i !== idx))
-              }
-              title="Remove drop"
-              aria-label="Remove drop"
-            >
-              –
-            </button>
-          )}
+                      {/* – remove (hide if only one row) */}
+                      {toStops.length > minStops && (
+                        <button
+                          type="button"
+                          className="mt-1 h-10 w-9 rounded-md border border-gray-300 text-gray-700"
+                          onClick={() =>
+                            setToStops((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          title="Remove drop"
+                          aria-label="Remove drop"
+                        >
+                          –
+                        </button>
+                      )}
 
-          {/* + add (show only on last row) */}
-          {idx === toStops.length - 1 && (
-            <button
-              type="button"
-              className="mt-1 h-10 w-9 rounded-md bg-black text-white"
-              onClick={() => {
-                if (toStops.length >= maxStops) return;
-                setToStops((prev) => [...prev, { id: makeId(), value: "" }]);
-              }}
-              title="Add drop"
-              aria-label="Add drop"
-            >
-              +
-            </button>
-          )}
-        </div>
+                      {/* + add (show only on last row) */}
+                      {idx === toStops.length - 1 && (
+                        <button
+                          type="button"
+                          className="mt-1 h-10 w-9 rounded-md bg-black text-white"
+                          onClick={() => {
+                            if (toStops.length >= maxStops) return;
+                            setToStops((prev) => [...prev, { id: makeId(), value: "" }]);
+                          }}
+                          title="Add drop"
+                          aria-label="Add drop"
+                        >
+                          +
+                        </button>
+                      )}
+                    </div>
 
-        {/* suggestions dropdown for THIS row */}
-        {activeDropIndex === idx && (
-          <ul className="absolute z-50 bg-white border border-gray-300 w-full mt-1 rounded max-h-40 overflow-y-auto shadow text-sm">
-            {filteredDrop.map((city) => (
-              <li
-                key={`drop-${idx}-${city}`}
-                className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
-                onMouseDown={() => {
-                  const next = [...toStops];
-                  next[idx] = { ...next[idx], value: city };
-                  setToStops(next);
-                  setActiveDropIndex(null);
-                  if (idx === 0) {
-                    setErrors((prev) => ({ ...prev, drop: undefined }));
-                  }
-                }}
-              >
-                {city}
-              </li>
-            ))}
-          </ul>
-        )}
+                    {/* suggestions dropdown for THIS row */}
+                    {activeDropIndex === idx && (
+                      <ul className="absolute z-50 bg-white border border-gray-300 w-full mt-1 rounded max-h-40 overflow-y-auto shadow text-sm">
+                        {filteredDrop.map((city) => (
+                          <li
+                            key={`drop-${idx}-${city}`}
+                            className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                            onMouseDown={() => {
+                              const next = [...toStops];
+                              next[idx] = { ...next[idx], value: city };
+                              setToStops(next);
+                              setActiveDropIndex(null);
+                              if (idx === 0) {
+                                setErrors((prev) => ({ ...prev, drop: undefined }));
+                              }
+                            }}
+                          >
+                            {city}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
 
-        {/* only show the error under the first TO field */}
-        {idx === 0 && errors.drop && (
-          <p className="text-red-600 text-xs mt-1">{errors.drop}</p>
-        )}
-      </div>
-    ))}
-  </div>
-</div>
-
+                    {/* only show the error under the first TO field */}
+                    {idx === 0 && errors.drop && (
+                      <p className="text-red-600 text-xs mt-1">{errors.drop}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
 
             {/* Pickup Date */}
             <div className="col-span-1">
@@ -273,6 +277,20 @@ const handleSubmit = () => {
                 onChange={(e) => setPickupDate(e.target.value)}
               />
             </div>
+
+            {/* Return Date (ROUND TRIP only) */}
+            {tripType === "ROUND TRIP" && (
+              <div className="col-span-1">
+                <label className="block text-sm font-medium text-gray-700">RETURN DATE</label>
+                <input
+                  type="date"
+                  className="mt-1 block w-full border border-gray-300 rounded text-black px-3 py-2"
+                  value={returnDate}
+                  min={pickupDate || undefined}
+                  onChange={(e) => setReturnDate(e.target.value)}
+                />
+              </div>
+            )}
 
             {/* Pickup Time */}
             <div className="col-span-1">
