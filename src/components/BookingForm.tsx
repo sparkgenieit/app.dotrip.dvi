@@ -2,6 +2,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { fetchWithRefresh } from '../utils/auth';
+import { v4 as uuidv4 } from 'uuid';
+
 
 // --- Helpers ---
 // Safe JSON parse (handles empty 201/204 responses)
@@ -123,10 +125,45 @@ export default function BookingForm() {
   const [error, setError] = useState<string | null>(null);
 
   // user inputs
-  const [pickupLocation, setPickupLocation] = useState('');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+// user inputs
+const [pickupLocation, setPickupLocation] = useState('');
+const [name, setName] = useState('');
+const [email, setEmail] = useState('');
+const [phone, setPhone] = useState('');
+
+// --- Places Autocomplete (Pickup) ---
+const [pickupSuggestions, setPickupSuggestions] = useState<
+  { description: string; place_id: string }[]
+>([]);
+const pickupController = useRef<AbortController | null>(null);
+const pickupSession = useRef(uuidv4());
+
+// call backend proxy: GET /places/autocomplete?input=...&sessiontoken=...
+async function fetchPickupSuggestions(input: string, fromCityName: string) {
+  pickupController.current?.abort();
+  pickupController.current = new AbortController();
+  try {
+    const res = await fetchWithRefresh(
+      `/places/autocomplete?input=${encodeURIComponent(
+        `${fromCityName} ${input}`.trim()
+      )}&sessiontoken=${pickupSession.current}`,
+      {
+        signal: pickupController.current.signal as any,
+        // headers not required here; fetchWithRefresh handles auth if needed
+      }
+    );
+    if (!res.ok) throw new Error('Failed to fetch suggestions');
+    const data = await res.json();
+    // expect: array like [{ description, place_id }, ...]
+    setPickupSuggestions(Array.isArray(data) ? data : []);
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') {
+      console.error('pickup autocomplete failed:', err);
+    }
+    setPickupSuggestions([]);
+  }
+}
+
 
   // OTP state
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -335,6 +372,32 @@ async function handlePhoneBlur() {
     else setError(null);
   }, [email, phone]);
 
+  // Debounce pickup autocomplete calls
+useEffect(() => {
+  const ctrl = pickupController.current;
+  const val = pickupLocation.trim();
+
+  // need a little input and a from-city to bias results
+  if (val.length < 2) {
+    setPickupSuggestions([]);
+    return;
+  }
+
+  const fromCityName = (from || '').replace('—', '').trim();
+  if (!fromCityName) {
+    // still allow without from-city context
+  }
+
+  const t = setTimeout(() => {
+    fetchPickupSuggestions(val, fromCityName);
+  }, 300);
+
+  return () => {
+    clearTimeout(t);
+    ctrl?.abort();
+  };
+}, [pickupLocation, from]);
+
   // Reset OTP state when phone changes
 useEffect(() => {
   setOtpVerified(false);
@@ -369,16 +432,54 @@ useEffect(() => {
                     className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Pickup Location</label>
-              <input
-                type="text"
-                placeholder="e.g., Hitech City Metro Gate 1"
-                value={pickupLocation}
-                onChange={(e) => setPickupLocation(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </div>
+            <div className="relative">
+  <label className="mb-1 block text-sm font-medium text-gray-700">Pickup Location</label>
+  <input
+    type="text"
+    placeholder="e.g., Hitech City Metro Gate 1"
+    value={pickupLocation}
+    onChange={(e) => setPickupLocation(e.target.value)}
+    onKeyDown={(e) => {
+      if (e.key === 'Escape') setPickupSuggestions([]);
+    }}
+    onBlur={() => {
+      // small delay so a click on a suggestion still registers
+      setTimeout(() => setPickupSuggestions([]), 150);
+    }}
+    autoComplete="off"
+    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+  />
+
+  {pickupSuggestions.length > 0 && (
+    <ul
+      role="listbox"
+      className="absolute z-50 mt-1 max-h-64 w-full overflow-auto rounded-md border border-gray-200 bg-white text-sm shadow-lg"
+    >
+      {pickupSuggestions.map((s) => (
+        <li
+          key={s.place_id}
+          role="option"
+          tabIndex={0}
+          onMouseDown={(e) => e.preventDefault()} // keep focus on input
+          onClick={() => {
+            setPickupLocation(s.description);
+            setPickupSuggestions([]);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setPickupLocation(s.description);
+              setPickupSuggestions([]);
+            }
+          }}
+          className="cursor-pointer px-3 py-2 hover:bg-gray-100"
+        >
+          {s.description}
+        </li>
+      ))}
+    </ul>
+  )}
+</div>
+
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
