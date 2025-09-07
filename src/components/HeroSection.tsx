@@ -16,6 +16,7 @@ const [pickupLocation, setPickupLocation] = useState("");
 const [pickupDate, setPickupDate] = useState("2025-05-05");
 const [pickupTime, setPickupTime] = useState("07:00");
 const [returnDate, setReturnDate] = useState("2025-05-05");
+const [returnTime, setReturnTime] = useState("07:00");
 
 // MULTI-STOP "TO" field
 const [toStops, setToStops] = useState<Array<{ id: string; value: string }>>([
@@ -93,6 +94,7 @@ const handleSubmit = () => {
 
   if (tripType === "ROUND TRIP" && returnDate) {
     params.set("return_date", returnDate);
+    if (returnTime) params.set("return_time", returnTime);
   }
 
   // Optional: pass ALL drops as JSON (backend can ignore if not needed)
@@ -133,7 +135,7 @@ const handleSubmit = () => {
           </div>
 
             <form
-              className={`grid ${tripType === "ROUND TRIP" ? "md:grid-cols-7" : "md:grid-cols-6"} gap-4 relative z-10`}
+              className={`grid ${tripType === "ROUND TRIP" ? "md:grid-cols-8" : "md:grid-cols-6"} gap-4 relative z-10`}
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSubmit();
@@ -267,7 +269,7 @@ const handleSubmit = () => {
               </div>
             </div>
 
-            {/* Pickup Date */}
+            {/* PICK UP DATE */}
             <div className="col-span-1">
               <label className="block text-sm font-medium text-gray-700">PICK UP DATE</label>
               <input
@@ -277,8 +279,18 @@ const handleSubmit = () => {
                 onChange={(e) => setPickupDate(e.target.value)}
               />
             </div>
+            {/* PICK UP TIME */}
+            <div className="col-span-1">
+              <label className="block text-sm font-medium text-gray-700">PICK UP TIME</label>
+              <input
+                type="time"
+                className="mt-1 block w-full border border-gray-300 rounded text-black px-3 py-2"
+                value={pickupTime}
+                onChange={(e) => setPickupTime(e.target.value)}
+              />
+            </div>
 
-            {/* Return Date (ROUND TRIP only) */}
+            {/* RETURN DATE (ROUND TRIP) */}
             {tripType === "ROUND TRIP" && (
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">RETURN DATE</label>
@@ -292,16 +304,18 @@ const handleSubmit = () => {
               </div>
             )}
 
-            {/* Pickup Time */}
-            <div className="col-span-1">
-              <label className="block text-sm font-medium text-gray-700">PICK UP TIME</label>
-              <input
-                type="time"
-                className="mt-1 block w-full border border-gray-300 rounded text-black px-3 py-2"
-                value={pickupTime}
-                onChange={(e) => setPickupTime(e.target.value)}
-              />
-            </div>
+            {/* RETURN TIME (ROUND TRIP) */}
+            {tripType === "ROUND TRIP" && (
+              <div className="col-span-1">
+                <label className="block text-sm font-medium text-gray-700">RETURN TIME</label>
+                <input
+                  type="time"
+                  className="mt-1 block w-full border border-gray-300 rounded text-black px-3 py-2"
+                  value={returnTime}
+                  onChange={(e) => setReturnTime(e.target.value)}
+                />
+              </div>
+            )}
           </form>
 
           <div className="text-center mt-6">

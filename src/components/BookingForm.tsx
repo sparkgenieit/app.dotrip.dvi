@@ -188,6 +188,7 @@ async function fetchPickupSuggestions(input: string, fromCityName: string) {
   const tripTypeLabel = sp.get('trip_type_label') || 'Trip';
   const returnDate = sp.get('return_date') || '';
   const isRoundTrip = (tripTypeLabel || '').toUpperCase() === 'ROUND TRIP';
+  const returnTime = sp.get('return_time') || '';
 
   // ---- OTP endpoints (adjust to your backend if different) ----
 const OTP_SEND_URL = '/auth/otp/send';
@@ -292,6 +293,15 @@ async function createBooking(payload: any) {
   // basic “required” check
   const canSubmit = pickupLocation.trim() && name.trim() && email.trim() && phone.trim();
 
+  // ADD — normalize "H:mm" → "HH:mm"
+function toHHmm(t: string) {
+  if (!t || typeof t !== 'string') return '';
+  const m = t.match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!m) return '';
+  const hh = String(parseInt(m[1], 10)).padStart(2, '0');
+  return `${hh}:${m[2]}`;
+}
+
 async function handleSubmit(e: React.FormEvent) {
   e.preventDefault();
   await onConfirmClick();
@@ -315,23 +325,52 @@ async function buildPayload(): Promise<any | null> {
   // Parse fare safely
   const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
 
-  if (isRoundTrip && !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
-    setError('Please select a valid return date for a round trip.');
+  // Validate pickup date/time for the new DTO
+  const pickupDateISO = String(date);            // expected "YYYY-MM-DD"
+  const pickupTimeHHmm = toHHmm(String(time));   // normalize "H:mm" -> "HH:mm"
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(pickupDateISO)) {
+    setError('pickupDate must be YYYY-MM-DD');
+    return null;
+  }
+  if (!/^[0-2]\d:[0-5]\d$/.test(pickupTimeHHmm)) {
+    setError('pickupTime must be HH:mm');
     return null;
   }
 
+  // Optional return parts for round trip
+  const returnTimeHHmm = returnTime ? toHHmm(String(returnTime)) : '';
+
+  if (isRoundTrip && returnDate && !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
+    setError('returnDate must be YYYY-MM-DD');
+    return null;
+  }
+  if (isRoundTrip && returnTime && !/^[0-2]\d:[0-5]\d$/.test(returnTimeHHmm)) {
+    setError('returnTime must be HH:mm');
+    return null;
+  }
+
+  // Send split fields as your new backend expects
   return {
     phone,
     pickupLocation,
     dropoffLocation: to,
-    pickupDateTime: toISO(date, time),
+
+    // NEW: split fields
+    pickupDate: pickupDateISO,       // "YYYY-MM-DD"
+    pickupTime: pickupTimeHHmm,      // "HH:mm"
+    ...(isRoundTrip && returnDate ? { returnDate } : {}),
+    ...(isRoundTrip && returnTimeHHmm ? { returnTime: returnTimeHHmm } : {}),
+
     fromCityId,
     toCityId,
     tripTypeId,
     vehicleTypeId,
     fare: fareNum,
-    numPersons: 4,
-    ...(isRoundTrip && returnDate ? { returnDate } : {}),
+
+    // ensure required by DTO
+    numPersons: 1,
+    numVehicles: 1,
   };
 }
 
@@ -552,12 +591,15 @@ useEffect(() => {
               <span>Pickup</span>
               <span className="font-medium">{date} {time !== "—" ? `• ${time}` : ""}</span>
             </div>
-            {isRoundTrip && returnDate && (
-              <div className="flex justify-between">
-                <span>Return</span>
-                <span className="font-medium">{returnDate}</span>
-              </div>
-            )}
+            {isRoundTrip && (returnDate || returnTime) && (
+                <div className="flex justify-between">
+                  <span>Return</span>
+                  <span className="font-medium">
+                    {returnDate}{returnTime ? ` • ${toHHmm(returnTime)}` : ''}
+                  </span>
+                </div>
+              )}
+
             <div className="flex justify-between">
               <span>Vehicle</span>
               <span className="font-medium">{car}</span>
