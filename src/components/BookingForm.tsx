@@ -6,6 +6,28 @@ import { v4 as uuidv4 } from 'uuid';
 
 
 // --- Helpers ---
+
+// === ADD: token helpers ===
+const AUTH_TOKEN_KEY = 'access_token';
+
+function setAuthToken(token: string) {
+  try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch {}
+  try { sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch {}
+}
+
+function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || sessionStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// normalize phone to digits only (server expects your OTP format)
+function normalizePhone(raw: string) {
+  return String(raw || '').replace(/\D/g, '');
+}
+
 // Safe JSON parse (handles empty 201/204 responses)
 async function safeJson<T = any>(res: Response): Promise<T | null> {
   const text = await res.text();
@@ -86,37 +108,6 @@ function latestPerType(addresses: AddressLite[] = []): AddressLite[] {
   return out;
 }
 
-// Call backend: POST /users/check-phone
-async function fetchUserByPhone(phone: string): Promise<CheckPhoneResponse> {
-  try {
-    const res = await fetchWithRefresh('/users/check-phone', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
-    });
-    if (!res.ok) return { exists: false };
-
-    const data = await res.json().catch(() => null) || {};
-    const rawAddresses: AddressLite[] = data.addresses ?? data.user?.addressBooks ?? [];
-    const deduped = latestPerType(rawAddresses);
-
-    return {
-      exists: Boolean(data?.exists),
-      user: data?.user
-        ? {
-            id: Number(data.user.id),
-            name: String(data.user.name ?? ''),
-            phone: String(data.user.phone ?? ''),
-          }
-        : undefined,
-      addresses: deduped,
-    };
-  } catch (e) {
-    console.error('check-phone failed:', e);
-    return { exists: false };
-  }
-}
-
 export default function BookingForm() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -137,6 +128,7 @@ const [pickupSuggestions, setPickupSuggestions] = useState<
 >([]);
 const pickupController = useRef<AbortController | null>(null);
 const pickupSession = useRef(uuidv4());
+const verifiedPhoneRef = useRef<string | null>(null);
 
 // call backend proxy: GET /places/autocomplete?input=...&sessiontoken=...
 async function fetchPickupSuggestions(input: string, fromCityName: string) {
@@ -188,46 +180,101 @@ async function fetchPickupSuggestions(input: string, fromCityName: string) {
   const tripTypeLabel = sp.get('trip_type_label') || 'Trip';
   const returnDate = sp.get('return_date') || '';
   const isRoundTrip = (tripTypeLabel || '').toUpperCase() === 'ROUND TRIP';
-  const returnTime = sp.get('return_time') || '';
 
-  // ---- OTP endpoints (adjust to your backend if different) ----
-const OTP_SEND_URL = '/auth/otp/send';
-const OTP_VERIFY_URL = '/auth/otp/verify';
+// === WITH: real endpoints (adjust if your backend paths differ) ===
+// === REPLACE THESE LINES ===
+// const OTP_SEND_URL = '/auth/otp/send';
+// const OTP_VERIFY_URL = '/auth/otp/verify';
+async function prefillFromMe() {
+  try {
+    const res = await fetchWithRefresh('/users/me');
+    if (!res.ok) return;
+    const me = await res.json().catch(() => null);
+    if (!me) return;
 
-// Send OTP to phone
+    if (me.name) setName(String(me.name));
+    if (me.email) setEmail(String(me.email));
+if (me.phone) {
+  setPhone(prev => (prev ? prev : String(me.phone)));
+}
+    // ✅ prefill pickup from the latest non-empty PICKUP address
+    if (Array.isArray(me.addressBooks)) {
+      const sorted = [...me.addressBooks]
+        .filter(a => a.type === 'PICKUP' && a.address && a.address.trim()) // only valid pickups
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      if (!pickupLocation && sorted.length > 0) {
+        setPickupLocation(sorted[0].address!);
+      }
+    }
+  } catch (e) {
+    console.error('prefillFromMe failed:', e);
+  }
+}
+
+// === WITH: real endpoints (adjust if your backend paths differ) ===
+const OTP_SEND_PATH = `/auth/send-otp`;
+const OTP_VERIFY_PATH = `/auth/verify-otp`;
+
 async function sendOtp(toPhone: string) {
-  // Testing mode: no backend call — just open the modal
-  setShowOtpModal(true);
-  setOtp('');
-  setOtpVerified(false);
-  otpVerifiedRef.current = false;  // <-- reset the guard ref
-  setOtpRequestId('mock');
-  setOtpTimer(60);                  // resend cooldown
-  setOtpSending(false);
+  const phoneDigits = normalizePhone(toPhone);
+  setOtpSending(true);
   setError(null);
+  try {
+    const res = await fetchWithRefresh(OTP_SEND_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobileNumber: phoneDigits }),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(txt || `Failed to send OTP (${res.status})`);
+    }
+
+    setShowOtpModal(true);
+    setOtp('');
+    setOtpVerified(false);
+    otpVerifiedRef.current = false;
+    setOtpRequestId('server');
+    setOtpTimer(60);
+  } catch (e: any) {
+    setError(e?.message || 'Could not send OTP. Please try again.');
+  } finally {
+    setOtpSending(false);
+  }
 }
 
 // Verify OTP; on success proceed with booking
+// === REPLACE ENTIRE verifyOtpAndBook() WITH: ===
 async function verifyOtpAndBook() {
-  if (!phone || !otp) return;
+  const phoneDigits = normalizePhone(phone);
+  if (!phoneDigits || !otp) return;
   setOtpVerifying(true);
   setError(null);
 
   try {
-    // ✅ Testing mode: only "1234" is accepted
-    if (otp.trim() !== '1234') {
-      throw new Error('Invalid OTP. Use 1234 for testing.');
+    const res = await fetchWithRefresh('/auth/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobileNumber: phoneDigits, otp: otp.trim() }),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(txt || `OTP verification failed (${res.status})`);
     }
 
-    // Mark verified BEFORE creating booking to avoid any race
+    const data = await res.json().catch(() => ({}));
+    const token = data?.access_token || data?.accessToken || data?.token;
+    if (!token) throw new Error('No access_token returned by /auth/verify-otp');
+    setAuthToken(token);
+    verifiedPhoneRef.current = normalizePhone(phone);  // ✅ save the verified phone
     otpVerifiedRef.current = true;
     setOtpVerified(true);
     setShowOtpModal(false);
-
-    // Build payload and create booking
-    const payload = await buildPayload();
-    if (!payload) return;
-    await createBooking(payload);
+    await prefillFromMe();
+    setError(null);
   } catch (e: any) {
     setError(e?.message || 'OTP verification failed');
   } finally {
@@ -235,18 +282,28 @@ async function verifyOtpAndBook() {
   }
 }
 
+
+
+
 // Final guard: do not create a booking unless OTP is verified.
 // If someone calls this by mistake, we open the OTP modal instead.
+// === REPLACE ENTIRE createBooking() WITH: ===
 async function createBooking(payload: any) {
-  if (!otpVerified && !otpVerifiedRef.current) {
-    setPendingPayload(payload);
-    setShowOtpModal(true);
+  const token = getAuthToken();
+  if (!token) {
+    // no token and not verified → open OTP
+    if (!otpVerified && !otpVerifiedRef.current) {
+      setPendingPayload(payload);
+      setShowOtpModal(true);
+      return;
+    }
+    setError('Session expired. Please verify OTP again.');
     return;
   }
-
+console.log('Creating booking with payload:', token, payload);
   const res = await fetchWithRefresh('/bookings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' }, // Authorization is added by fetchWithRefresh if token exists
     body: JSON.stringify(payload),
   });
 
@@ -290,17 +347,9 @@ async function createBooking(payload: any) {
   }
 }
 
+
   // basic “required” check
   const canSubmit = pickupLocation.trim() && name.trim() && email.trim() && phone.trim();
-
-  // ADD — normalize "H:mm" → "HH:mm"
-function toHHmm(t: string) {
-  if (!t || typeof t !== 'string') return '';
-  const m = t.match(/^(\d{1,2}):([0-5]\d)$/);
-  if (!m) return '';
-  const hh = String(parseInt(m[1], 10)).padStart(2, '0');
-  return `${hh}:${m[2]}`;
-}
 
 async function handleSubmit(e: React.FormEvent) {
   e.preventDefault();
@@ -322,57 +371,49 @@ async function buildPayload(): Promise<any | null> {
     return null;
   }
 
-  // Parse fare safely
-  const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
+  // Expect date like "YYYY-MM-DD" and time like "HH:mm"
+  const dateStr = String(date || '').trim();          // e.g. "2025-05-05"
+  const timeStr = String(time || '').trim();          // e.g. "07:00"
 
-  // Validate pickup date/time for the new DTO
-  const pickupDateISO = String(date);            // expected "YYYY-MM-DD"
-  const pickupTimeHHmm = toHHmm(String(time));   // normalize "H:mm" -> "HH:mm"
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(pickupDateISO)) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     setError('pickupDate must be YYYY-MM-DD');
     return null;
   }
-  if (!/^[0-2]\d:[0-5]\d$/.test(pickupTimeHHmm)) {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(timeStr)) {
     setError('pickupTime must be HH:mm');
     return null;
   }
 
-  // Optional return parts for round trip
-  const returnTimeHHmm = returnTime ? toHHmm(String(returnTime)) : '';
+  // Parse fare safely
+  const fareNum = Number(String(fare || 0).replace(/[^\d.]/g, '') || 0);
 
-  if (isRoundTrip && returnDate && !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
-    setError('returnDate must be YYYY-MM-DD');
-    return null;
-  }
-  if (isRoundTrip && returnTime && !/^[0-2]\d:[0-5]\d$/.test(returnTimeHHmm)) {
-    setError('returnTime must be HH:mm');
+  // Round-trip validation (optional returnDate / returnTime)
+  const rtDate = String(returnDate || '').trim();
+  if (tripLabel === 'ROUND TRIP' && !/^\d{4}-\d{2}-\d{2}$/.test(rtDate)) {
+    setError('Please select a valid return date for a round trip.');
     return null;
   }
 
-  // Send split fields as your new backend expects
+  // ✅ Send the fields that the server DTO expects
   return {
-    phone,
+    phone,                              // ignored for RIDER; used for ADMIN/VENDOR
     pickupLocation,
     dropoffLocation: to,
 
-    // NEW: split fields
-    pickupDate: pickupDateISO,       // "YYYY-MM-DD"
-    pickupTime: pickupTimeHHmm,      // "HH:mm"
-    ...(isRoundTrip && returnDate ? { returnDate } : {}),
-    ...(isRoundTrip && returnTimeHHmm ? { returnTime: returnTimeHHmm } : {}),
+    pickupDate: dateStr,                // <-- date-only
+    pickupTime: timeStr,                // <-- HH:mm
+
+    ...(tripLabel === 'ROUND TRIP' && rtDate ? { returnDate: rtDate } : {}),
 
     fromCityId,
     toCityId,
     tripTypeId,
     vehicleTypeId,
     fare: fareNum,
-
-    // ensure required by DTO
-    numPersons: 1,
-    numVehicles: 1,
+    numPersons: 4,
   };
 }
+
 
 async function onConfirmClick() {
   if (!pickupLocation.trim() || !name.trim() || !email.trim() || !phone.trim()) {
@@ -383,26 +424,50 @@ async function onConfirmClick() {
     setError('Enter a valid phone number to receive OTP.');
     return;
   }
+
   setError(null);
-  await sendOtp(phone); // opens modal immediately; booking happens after verify
+
+  const token = getAuthToken();
+  if (token) {
+    // already authenticated → create booking directly
+    const payload = await buildPayload();
+    if (!payload) return;
+    await createBooking(payload);
+    return;
+  }
+
+  // no token → require OTP
+  await sendOtp(phone);
 }
+
+
+
 
 async function handlePhoneBlur() {
   const digits = phone.trim();
-  if (!/^\d{7,15}$/.test(digits)) return; // soft guard
 
-  const { exists, user, addresses } = await fetchUserByPhone(digits);
-  if (!exists || !user) return;
+  // Basic validation: must be 7–15 digits
+  if (!/^\d{7,15}$/.test(digits)) return;
 
-  // Prefill name if empty
-  if (!name && user.name) setName(user.name);
+  // Skip if OTP already verified or token exists
+  if (otpVerified || getAuthToken()) return;
 
-  // Prefill pickup from latest PICKUP address if available
-  const pickup = addresses?.find(a => a.type === 'PICKUP');
-  if (!pickupLocation && pickup?.address) {
-    setPickupLocation(pickup.address);
+  try {
+    // Trigger OTP send immediately
+    await sendOtp(digits);
+  } catch (e) {
+    console.error('Auto OTP send failed on blur:', e);
   }
 }
+
+useEffect(() => {
+  const token = getAuthToken();
+  if (token) {
+    // already logged in from an earlier step/session
+    prefillFromMe();
+  }
+}, []);
+
 
   // rough email/phone hints (optional soft validation)
   useEffect(() => {
@@ -591,15 +656,12 @@ useEffect(() => {
               <span>Pickup</span>
               <span className="font-medium">{date} {time !== "—" ? `• ${time}` : ""}</span>
             </div>
-            {isRoundTrip && (returnDate || returnTime) && (
-                <div className="flex justify-between">
-                  <span>Return</span>
-                  <span className="font-medium">
-                    {returnDate}{returnTime ? ` • ${toHHmm(returnTime)}` : ''}
-                  </span>
-                </div>
-              )}
-
+            {isRoundTrip && returnDate && (
+              <div className="flex justify-between">
+                <span>Return</span>
+                <span className="font-medium">{returnDate}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>Vehicle</span>
               <span className="font-medium">{car}</span>

@@ -1,29 +1,36 @@
-const ENV_EMAIL = process.env.NEXT_PUBLIC_API_EMAIL || 'test@example.com';
-const ENV_PASSWORD = process.env.NEXT_PUBLIC_API_PASSWORD || 'hunter2';
+// utils/auth.ts
 
-export async function loginWithEnvCredentials() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ identifier: ENV_EMAIL, password: ENV_PASSWORD }),
-  });
-  if (!res.ok) throw new Error('Login failed');
-  return await res.json();
+const AUTH_TOKEN_KEY = 'access_token';
+
+function getAuthToken(): string | null {
+  try {
+    return (
+      localStorage.getItem(AUTH_TOKEN_KEY) ||
+      sessionStorage.getItem(AUTH_TOKEN_KEY)
+    );
+  } catch {
+    return null;
+  }
 }
 
+export async function fetchWithRefresh(
+  path: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = getAuthToken();
 
-export async function fetchWithRefresh(path: string, options: RequestInit = {}) {
-  const authDetails = await loginWithEnvCredentials();
-console.log(options); console.log(authDetails);
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
+
+  // ✅ Add Authorization header only if token is present
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  return fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${authDetails.access_token}`,
-      ...(options.headers || {}),
-    },
+    headers,
   });
-
-  return res;
 }
