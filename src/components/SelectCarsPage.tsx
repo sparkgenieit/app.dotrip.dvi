@@ -3,6 +3,13 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { fetchWithRefresh } from "../utils/auth";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
+const toImageUrl = (p?: string) => {
+  if (!p) return '';
+  const clean = p.replace(/\\/g, '/').replace(/^\/+/, '');
+  return clean.startsWith('http') ? clean : `${API_BASE}/${clean}`;
+};
+
 type Car = {
   id?: number;
   name: string;
@@ -98,17 +105,19 @@ useEffect(() => {
       const data: ApiVehicleType[] = await res.json();
 
       const mapped: Car[] = data.map((v) => {
-        const base = v.baseFare ?? 0;
-        const rate = v.estimatedRatePerKm ?? 0;
+      const base = v.baseFare ?? 0;
+      const rate = v.estimatedRatePerKm ?? 0;
+      const estimated = hasDistance ? Math.round(base + rate * distanceKmParam) : base;
 
-        // If distance provided: base + rate * km, else show base fare
-        const estimated = hasDistance ? Math.round(base + rate * distanceKmParam) : base;
+      // prefer API-provided image; make it absolute to backend; otherwise fallback to /public/cars/*
+      const cover = coverFromImageJson(v.image) || v.image;
+      const abs = toImageUrl(cover);
+      const fallback = `/cars/${IMAGE_MAP[v.name] ?? "default.png"}`;
 
-      const cover = coverFromImageJson(v.image);
       return {
         id: v.id,
         name: v.name,
-        imageUrl: cover || (IMAGE_MAP[v.name] ?? "default.png"),
+        imageUrl: abs || fallback,
         seats: v.seatingCapacity,
         price: estimated,
         originalPrice: Math.round(estimated * 1.12),
@@ -117,7 +126,7 @@ useEffect(() => {
         ac: true,
         bags: 1,
       };
-      });
+    });
 
       setCars(mapped);
     } catch (err) {
@@ -192,17 +201,12 @@ const continueToBooking = (carName: string, price: number | string) => {
               <div className="grid grid-cols-12 gap-4 items-center p-4">
                 <div className="col-span-12 md:col-span-3 flex items-center gap-4">
                   <img
-                    src={
-                      car.imageUrl?.startsWith('http') ||
-                      car.imageUrl?.startsWith('data:') ||
-                      car.imageUrl?.startsWith('/uploads')
-                        ? car.imageUrl
-                        : `/cars/${car.imageUrl}` // fallback to /public/cars/*
-                    }
+                    src={car.imageUrl}
                     alt={car.name}
                     className="w-24 h-20 object-contain md:w-28 md:h-24"
                     loading="lazy"
                   />
+
                   <div>
                     <div className="text-lg font-semibold">{car.name}</div>
                     <div className="text-sm text-gray-500">
